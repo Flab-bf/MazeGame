@@ -1,0 +1,29 @@
+/* 简单样式，深色主题 */
+body{
+  font-family: Arial, sans-serif;
+  background:#111;
+  color:#eee;
+  display:flex;
+  justify-content:center;
+  padding:20px;
+}
+#ui{
+  max-width:1000px;
+  width:100%;
+}
+#joinPanel { margin-bottom:8px; }
+#topbar{
+  display:flex;
+  gap:12px;
+  align-items:center;
+  margin-bottom:8px;
+}
+canvas{
+  background:#222;
+  border:4px solid #333;
+  display:block;
+  margin:10px 0;
+}
+#log{ min-height:40px; margin-top:8px }
+#shopList button { margin-right:6px; margin-bottom:6px; }
+

@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>迷宫逃生 | 多人协作挑战</title>
+  <!-- 引入Tailwind CSS用于样式设计 -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- 引入Font Awesome图标 -->
+  <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+  <style type="text/tailwindcss">
+    @layer utilities {
+      .content-auto { content-visibility: auto; }
+      .text-shadow { text-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+      .game-shadow { box-shadow: 0 8px 30px rgba(0,0,0,0.15); }
+      .btn-hover { @apply transition-all duration-200 hover:scale-105 active:scale-95; }
+    }
+  </style>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: '#3B82F6',
+            secondary: '#8B5CF6',
+            accent: '#F59E0B',
+            success: '#10B981',
+            danger: '#EF4444',
+            dark: '#1F2937',
+            light: '#F3F4F6'
+          },
+          fontFamily: {
+            game: ['"Press Start 2P"', 'cursive', 'sans-serif']
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-gradient-to-br from-gray-900 to-gray-800 text-light min-h-screen">
+  <div class="container mx-auto px-4 py-8 max-w-6xl">
+    <!-- 页面标题 -->
+    <header class="text-center mb-8">
+      <h1 class="text-[clamp(1.8rem,5vw,3rem)] font-bold text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary mb-2 text-shadow">
+        迷宫逃生
+      </h1>
+      <p class="text-gray-400 text-lg">多人协作·后端权威·实时挑战</p>
+    </header>
+
+    <!-- 主游戏区 -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <!-- 左侧游戏画布 -->
+      <div class="lg:col-span-2">
+        <!-- 游戏画布容器 -->
+        <div class="bg-dark rounded-xl p-4 game-shadow overflow-hidden">
+          <canvas id="game" class="w-full h-auto rounded-lg bg-gray-900"></canvas>
+
+          <!-- 状态条 -->
+          <div class="flex flex-wrap justify-between items-center mt-4 gap-2 text-sm md:text-base">
+            <div class="flex items-center gap-1">
+              <i class="fa fa-user-circle text-primary"></i>
+              <span id="status" class="font-medium">未加入游戏</span>
+            </div>
+            <div class="flex items-center gap-1">
+              <i class="fa fa-clock-o text-accent"></i>
+              <span id="timer">用时: 0s</span>
+            </div>
+            <div class="flex items-center gap-1">
+              <i class="fa fa-coins text-yellow-500"></i>
+              <span id="coins">金币: 0</span>
+            </div>
+            <div class="flex items-center gap-1">
+              <i class="fa fa-heart text-danger"></i>
+              <span id="hp">生命: 0</span>
+            </div>
+          </div>
+
+          <!-- 操作日志 -->
+          <div class="mt-3 p-3 bg-gray-800 rounded-lg text-sm h-16 overflow-y-auto" id="log">
+            等待游戏开始...
+          </div>
+        </div>
+
+        <!-- 控制按钮 -->
+        <div class="flex flex-wrap gap-3 mt-4">
+          <div class="flex items-center gap-2 flex-1 min-w-[240px]">
+            <input
+              type="text"
+              id="playerName"
+              placeholder="输入你的名字"
+              class="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+            >
+            <button id="joinBtn" class="bg-primary hover:bg-primary/90 text-white px-4 py-2 rounded-lg btn-hover">
+              <i class="fa fa-sign-in mr-1"></i>加入游戏
+            </button>
+          </div>
+          <button id="newMazeBtn" class="bg-accent hover:bg-accent/90 text-white px-4 py-2 rounded-lg btn-hover">
+            <i class="fa fa-refresh mr-1"></i>生成新迷宫
+          </button>
+        </div>
+      </div>
+
+      <!-- 右侧信息面板 -->
+      <div class="space-y-6">
+        <!-- 商店面板 -->
+        <div class="bg-dark rounded-xl p-5 game-shadow">
+          <h3 class="text-xl font-bold mb-3 flex items-center">
+            <i class="fa fa-shopping-bag text-accent mr-2"></i>道具商店
+          </h3>
+          <div id="shopList" class="grid grid-cols-1 gap-2">
+            <!-- 商店物品将通过JS动态生成 -->
+            <div class="text-gray-400 italic text-sm">加入游戏后显示商品</div>
+          </div>
+        </div>
+
+        <!-- 排行榜 -->
+        <div class="bg-dark rounded-xl p-5 game-shadow">
+          <h3 class="text-xl font-bold mb-3 flex items-center">
+            <i class="fa fa-trophy text-yellow-500 mr-2"></i>排行榜
+          </h3>
+          <ol id="leaderboard" class="space-y-2 max-h-64 overflow-y-auto pr-2">
+            <!-- 排行榜数据将通过JS动态生成 -->
+            <li class="text-gray-400 italic text-sm">加载中...</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <!-- 移动控制区（移动端适配） -->
+    <div class="lg:hidden mt-6 bg-dark rounded-xl p-4 game-shadow">
+      <div class="flex justify-center gap-2">
+        <button class="move-btn" data-dx="0" data-dy="-1">
+          <i class="fa fa-arrow-up text-2xl"></i>
+        </button>
+      </div>
+      <div class="flex justify-center gap-2 my-2">
+        <button class="move-btn" data-dx="-1" data-dy="0">
+          <i class="fa fa-arrow-left text-2xl"></i>
+        </button>
+        <button class="move-btn" data-dx="1" data-dy="0">
+          <i class="fa fa-arrow-right text-2xl"></i>
+        </button>
+      </div>
+      <div class="flex justify-center gap-2">
+        <button class="move-btn" data-dx="0" data-dy="1">
+          <i class="fa fa-arrow-down text-2xl"></i>
+        </button>
+      </div>
+      <style>
+        .move-btn {
+          width: 60px;
+          height: 60px;
+          border-radius: 8px;
+          background: #3B82F6;
+          color: white;
+          border: none;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.1s;
+        }
+        .move-btn:active {
+          background: #2563EB;
+          transform: scale(0.95);
+        }
+      </style>
+    </div>
+  </div>
+
+  <!-- 底部版权信息 -->
+  <footer class="text-center text-gray-500 text-sm mt-12 pb-6">
+    © 2023 迷宫逃生 | 后端权威架构演示
+  </footer>
+
+  <!-- 引入Socket.IO客户端 -->
+  <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+  <!-- 游戏逻辑脚本 -->
+  <script src="/static/js/game_client.js"></script>
+</body>
+</html>
