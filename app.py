@@ -3,7 +3,7 @@ import eventlet
 eventlet.monkey_patch()
 from flask import Flask
 from flask_socketio import SocketIO
-from models import init_db
+from db import init_db
 from game_engine import GameEngine
 from routes import main_routes  # 导入HTTP路由蓝图
 from socket_events import register_socket_events  # 导入SocketIO事件注册函数

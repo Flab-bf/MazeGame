@@ -1,7 +1,7 @@
 import random, time
 from collections import deque
 from threading import Lock
-import models as mds
+import db as mds
 import copy
 
 #register/login 注册/登录

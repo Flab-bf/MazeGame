@@ -2,7 +2,7 @@
 from flask import request
 from flask_socketio import emit, join_room, leave_room
 
-from models import save_score
+from db import save_score
 
 #其中socketio.emit为玩家主动通信，在game_engine中为服务器主动通信
 def register_socket_events(socketio, engine):

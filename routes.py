@@ -1,6 +1,6 @@
 # routes.py
 from flask import Blueprint, render_template, jsonify
-from models import get_top_scores  # 导入数据库查询函数
+from db import get_top_scores  # 导入数据库查询函数
 
 # 创建蓝图（命名为`main`，模块为当前文件）
 main_routes = Blueprint('main', __name__)
