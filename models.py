@@ -1,12 +1,9 @@
 import random
-import tkinter as tk
-from tkinter import Canvas, simpledialog, messagebox, ttk
-from PIL import Image, ImageTk
 import time
 import math
-from game_3 import will_collide
+from maze01 import will_collide
 
-#怪物及其逻辑
+
 class Monster:
     MONSTER_TYPES = {
         "知识怪": {"speed": 3.0, "size_ratio": 0.6, "color": "purple", "img_path": r"D:\PythonProject\j\知识怪.png",
@@ -145,7 +142,7 @@ class Monster:
                             self.y += ty
                             break
 
-    #核心优化点（解决卡顿 + 卡墙）
+    # 核心优化点（解决卡顿 + 卡墙）
     def get_current_frame(self):
         if self.frames:
             return self.frames[self.current_frame]
@@ -162,6 +159,7 @@ class Monster:
 
         distance = math.hypot(player_center_x - monster_center_x, player_center_y - monster_center_y)
         return distance <= self.explode_radius
+
 
 # 玩家角色类
 class Player:
@@ -196,20 +194,31 @@ class Player:
         self.clairvoyance_end = 0  # 透视结束时间
         # 存储盲盒内容（透视用）
         self.box_contents = {}  # {(x,y): "金币/装备/怪物类型"}
+        # 新增：火把相关属性
+        self.has_torch = False  # 是否持有火把
+        self.torch_light_radius = 2  # 火把照亮范围（格子数）
+        # 新增：吹风机效果相关属性
+        self.no_fog_until = 0  # 吹风机效果结束时间
+
 
 # 新增：装备配置类
 class EquipmentSystem:
-    # 装备类型配置 - 新增透视药水和爆破弹
+    # 装备类型配置 - 新增透视药水、爆破弹和吹风机
     EQUIP_TYPES = {
-        1: {"name": "回复药水", "effect": "hp", "value": 10, "desc": "立即恢复10点生命值"},
-        2: {"name": "速度药水", "effect": "speed", "value": 1.0, "desc": "永久增加1点移动速度"},
-        3: {"name": "防护盾", "effect": "shield", "value": 1, "desc": "抵挡一次怪物伤害"},
-        4: {"name": "隐身药水", "effect": "invisible", "value": 5, "desc": "5秒内不被怪物索敌"},
-        5: {"name": "毒药", "effect": "poison", "value": 3, "desc": "使怪物3秒内无法移动"},
-        6: {"name": "净化药水", "effect": "purify", "value": 1, "desc": "清除所有负面效果"},
-        7: {"name": "透视药水", "effect": "clairvoyance", "value": 3, "desc": "3秒内可以看见盲盒里的物品"},
-        8: {"name": "爆破弹", "effect": "bomb", "value": 1, "desc": "使用时可以消灭最近的一个怪物"}
+        1: {"name": "回复药水", "effect": "hp", "value": 10, "desc": "立即恢复10点生命值", "price": 30},
+        2: {"name": "速度药水", "effect": "speed", "value": 1.0, "desc": "永久增加1点移动速度", "price": 80},
+        3: {"name": "防护盾", "effect": "shield", "value": 1, "desc": "抵挡一次怪物伤害", "price": 50},
+        4: {"name": "隐身药水", "effect": "invisible", "value": 5, "desc": "5秒内不被怪物索敌", "price": 60},
+        5: {"name": "毒药", "effect": "poison", "value": 3, "desc": "使怪物3秒内无法移动", "price": 40},
+        6: {"name": "净化药水", "effect": "purify", "value": 1, "desc": "清除所有负面效果", "price": 25},
+        7: {"name": "透视药水", "effect": "clairvoyance", "value": 3, "desc": "3秒内可以看见盲盒里的物品", "price": 70},
+        8: {"name": "爆破弹", "effect": "bomb", "value": 1, "desc": "使用时可以消灭最近的一个怪物", "price": 100},
+        9: {"name": "吹风机", "effect": "clear_fog", "value": 20, "desc": "清除场上所有迷雾，持续20秒", "price": 120}
+        # 新增吹风机
     }
+
+    # 商城商品列表（从盲盒中可以开出的装备）
+    SHOP_ITEMS = [1, 3, 4, 5, 6, 7, 8, 9]  # 可以购买的装备ID列表（排除速度药水，因为它太强）
 
     @classmethod
     def get_random_equip(cls, count=1):
@@ -218,8 +227,8 @@ class EquipmentSystem:
         return [cls.EQUIP_TYPES[eq_id] for eq_id in equip_ids]
 
     @classmethod
-    def use_equipment(cls, player, equip, monsters=None, box_positions=None, maze=None):
-        """使用装备并触发对应效果"""
+    def use_equipment(cls, player, equip, monsters=None, box_positions=None, maze=None, game_instance=None):
+        """使用装备并触发对应效果 - 新增透视药水、爆破弹和吹风机逻辑"""
         equip_name = equip["name"]
         effect = equip["effect"]
         value = equip["value"]
@@ -262,7 +271,7 @@ class EquipmentSystem:
             msg = f"使用{equip_name}，所有负面效果已清除！"
 
         elif effect == "clairvoyance":
-            # 新增：透视药水逻辑
+            # 透视药水逻辑
             player.clairvoyance = True
             player.clairvoyance_end = time.time() + value
             # 预先生成所有盲盒的内容
@@ -284,7 +293,7 @@ class EquipmentSystem:
             msg = f"使用{equip_name}，进入透视状态{value}秒！可以看到盲盒里的内容"
 
         elif effect == "bomb":
-            # 新增：爆破弹逻辑
+            # 爆破弹逻辑
             if monsters and len(monsters) > 0:
                 # 找到最近的怪物
                 closest_monster = None
@@ -312,6 +321,19 @@ class EquipmentSystem:
                     msg = f"使用{equip_name}，但当前没有存活的怪物！"
             else:
                 msg = f"使用{equip_name}，但当前没有怪物可消灭！"
+
+        elif effect == "clear_fog":
+            # 新增：吹风机逻辑 - 清除场上所有迷雾
+            if game_instance:
+                # 设置吹风机效果结束时间
+                player.no_fog_until = time.time() + value
+                # 清除当前迷雾
+                for y in range(game_instance.size):
+                    for x in range(game_instance.size):
+                        game_instance.fog[y][x] = 0
+                msg = f"使用{equip_name}，清除场上所有迷雾，持续{value}秒！"
+            else:
+                msg = f"使用{equip_name}失败，游戏实例未传递！"
 
         else:
             msg = f"{equip_name}使用失败，未知效果！"

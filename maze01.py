@@ -1,12 +1,9 @@
-import random
 import tkinter as tk
 from tkinter import Canvas, simpledialog, messagebox, ttk
 from PIL import Image, ImageTk
-import time
-import math
 from models import *
 
-import numpy as np
+
 # 优化迷宫生成逻辑（带环、多分支、增加可玩性）
 def generate_maze(size):
     """
@@ -20,7 +17,7 @@ def generate_maze(size):
         size = 9
 
     # 初始化迷宫：0=墙，1=路径，2=终点，3=盲盒
-    maze = np.zeros((size, size))
+    maze = [[0 for _ in range(size)] for _ in range(size)]
     start_x, start_y = 1, 1  # 起点固定在左上角
     end_x, end_y = size - 2, size - 2  # 终点固定在右下角
     maze[start_y][start_x] = 1  # 标记起点为路径
@@ -194,6 +191,7 @@ def generate_maze(size):
 
     return maze, box_pos_list
 
+
 # 优化碰撞检测（减少向上移动时的冗余计算）
 def will_collide(x, y, dx, dy, maze, cell_size, entity_size):
     new_x = x + dx
@@ -255,6 +253,35 @@ class MazeGame:
         self.end_screen_created = False  # 新增：标记结束界面是否已创建
         self.monsters_defeated = 0  # 新增：击败怪物计数器
 
+        # ========== 新增：迷雾机制相关属性 ==========
+        self.fog = []  # 迷雾二维数组，0=无迷雾，1=有迷雾
+        self.fog_percentage = 0  # 迷雾占地图百分比
+        self.fog_interval = 15  # 迷雾生成间隔（秒）
+        self.next_fog_time = time.time() + self.fog_interval  # 下次生成迷雾的时间
+        self.fog_warning = False  # 迷雾生成前警告标志
+        self.fog_warning_time = 0  # 警告开始时间
+        self.fog_warning_duration = 3  # 警告持续时间（秒）
+        self.fog_warning_text = ""  # 警告文本
+        self.fog_warning_show_time = 0  # 警告显示结束时间
+
+        # ========== 新增：火把相关属性 ==========
+        self.torch_position = None  # 火把位置 (x, y)
+        self.torch_collected = False  # 火把是否已被收集
+        self.torch_light_radius = 2  # 火把照亮范围（格子数）
+
+        # ========== 新增：陷阱机制相关属性 ==========
+        self.trap_positions = []  # 陷阱位置列表，每个元素为(x, y, type)，type=1为传送陷阱，type=2为反向陷阱
+        self.trap_visible = True  # 陷阱是否可见
+        self.trap_visible_end_time = 0  # 陷阱可见结束时间
+        self.trap_visible_duration = 5  # 陷阱可见持续时间（秒）
+        self.active_traps = set()  # 记录当前激活的陷阱（未触发的）
+        self.trap_triggered_text = ""  # 陷阱触发提示文本
+        self.trap_triggered_show_time = 0  # 陷阱提示显示结束时间
+
+        # ========== 新增：游戏时长计时器属性 ==========
+        self.game_start_time = time.time()  # 游戏开始时间
+        self.game_duration = 0  # 游戏已进行时间（秒）
+
         # ========== 修改：调整盲盒奖励概率 ==========
         # 提高怪物概率（70%），降低金币（15%）和装备（15%）概率
         self.box_gold_prob = 0.15  # 原0.3 → 改为0.15
@@ -291,6 +318,7 @@ class MazeGame:
         self.last_animation_time = time.time()  # 基于时间戳控制动画
 
         self.init_character_select()
+
     def init_character_select(self):
         for widget in self.root.winfo_children():
             widget.destroy()
@@ -331,10 +359,10 @@ class MazeGame:
             name_lbl.pack(pady=10)
 
             attr_text = f"""
-速度：{attr['speed']}
-体型：{attr['size_ratio']}
-幸运值：{attr['luck']}
-生命值：{attr['hp']}
+            速度：{attr['speed']}
+            体型：{attr['size_ratio']}
+            幸运值：{attr['luck']}
+            生命值：{attr['hp']}
             """
             attr_lbl = tk.Label(
                 card,
@@ -368,13 +396,29 @@ class MazeGame:
         self.preload_all_assets()
         self.maze, self.box_positions = generate_maze(self.size)
 
+        # ========== 新增：初始化迷雾数组 ==========
+        self.fog = [[0 for _ in range(self.size)] for _ in range(self.size)]
+        # 重置游戏开始时间和迷雾计时器
+        self.game_start_time = time.time()
+        self.next_fog_time = time.time() + self.fog_interval
+
+        # ========== 新增：生成火把 ==========
+        self.spawn_torch()
+
+        # ========== 新增：生成陷阱 ==========
+        self.generate_traps()
+        # 设置陷阱可见时间
+        self.trap_visible = True
+        self.trap_visible_end_time = time.time() + self.trap_visible_duration
+
         self.directions = {"up": False, "down": False, "left": False, "right": False}
 
         self.canvas = Canvas(self.root, bg="#e3e3e3")
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
-        # 新增：装备使用按钮
+        # 新增：装备使用按钮和金币商城按钮
         self.create_equipment_buttons()
+        self.create_shop_button()
 
         self.root.bind("<KeyPress>", self.on_key_press)
         self.root.bind("<KeyRelease>", self.on_key_release)
@@ -399,6 +443,162 @@ class MazeGame:
         # 装备按钮容器（滚动条）
         self.equip_btn_frame = tk.Frame(self.equip_frame, bg="#f0f8ff")
         self.equip_btn_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+    def create_shop_button(self):
+        """创建金币商城按钮"""
+        # 在装备栏下方添加金币商城按钮
+        self.shop_frame = tk.Frame(self.root, bg="#f0f8ff", relief=tk.RAISED, bd=2)
+        self.shop_frame.place(x=10, y=360, width=180, height=60)
+
+        # 金币商城按钮
+        self.shop_btn = tk.Button(
+            self.shop_frame,
+            text="💰 金币商城",
+            font=("微软雅黑", 12, "bold"),
+            bg="#FFD700",
+            fg="#2c3e50",
+            width=15,
+            height=2,
+            command=self.open_shop
+        )
+        self.shop_btn.pack(pady=10)
+
+    def open_shop(self):
+        """打开金币商城窗口"""
+        if self.game_over or self.paused:
+            return
+
+        # 创建商城窗口
+        shop_window = tk.Toplevel(self.root)
+        shop_window.title("金币商城")
+        shop_window.geometry("400x500")
+        shop_window.resizable(False, False)
+        shop_window.configure(bg="#f0f8ff")
+
+        # 商城标题
+        tk.Label(
+            shop_window,
+            text="💰 金币商城",
+            font=("微软雅黑", 20, "bold"),
+            bg="#f0f8ff",
+            fg="#2c3e50"
+        ).pack(pady=10)
+
+        # 显示玩家当前金币
+        tk.Label(
+            shop_window,
+            text=f"当前金币: {self.player.gold}",
+            font=("微软雅黑", 14, "bold"),
+            bg="#f0f8ff",
+            fg="#27ae60"
+        ).pack(pady=5)
+
+        # 创建滚动区域
+        canvas = tk.Canvas(shop_window, bg="#f0f8ff")
+        scrollbar = tk.Scrollbar(shop_window, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg="#f0f8ff")
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # 显示可购买的商品
+        shop_items = EquipmentSystem.SHOP_ITEMS
+
+        for idx, item_id in enumerate(shop_items):
+            equip = EquipmentSystem.EQUIP_TYPES[item_id]
+
+            # 创建商品框架
+            item_frame = tk.Frame(scrollable_frame, bg="white", relief=tk.RAISED, bd=2)
+            item_frame.pack(fill=tk.X, padx=20, pady=10, ipadx=10, ipady=5)
+
+            # 商品信息
+            tk.Label(
+                item_frame,
+                text=f"【{equip['name']}】",
+                font=("微软雅黑", 14, "bold"),
+                bg="white",
+                fg="#2c3e50"
+            ).pack(anchor="w", padx=10, pady=5)
+
+            # 商品描述
+            tk.Label(
+                item_frame,
+                text=equip['desc'],
+                font=("微软雅黑", 10),
+                bg="white",
+                fg="#7f8c8d"
+            ).pack(anchor="w", padx=10, pady=2)
+
+            # 价格和购买按钮
+            price_frame = tk.Frame(item_frame, bg="white")
+            price_frame.pack(fill=tk.X, padx=10, pady=5)
+
+            tk.Label(
+                price_frame,
+                text=f"💰 {equip['price']} 金币",
+                font=("微软雅黑", 12, "bold"),
+                bg="white",
+                fg="#e67e22"
+            ).pack(side=tk.LEFT)
+
+            # 购买按钮
+            buy_btn = tk.Button(
+                price_frame,
+                text="购买",
+                font=("微软雅黑", 10, "bold"),
+                bg="#3498db",
+                fg="white",
+                width=8,
+                command=lambda eq=equip: self.buy_equipment(eq, shop_window)
+            )
+            buy_btn.pack(side=tk.RIGHT, padx=10)
+
+            # 如果金币不足，禁用购买按钮
+            if self.player.gold < equip['price']:
+                buy_btn.config(state=tk.DISABLED, bg="#95a5a6")
+
+        # 关闭按钮
+        tk.Button(
+            shop_window,
+            text="关闭",
+            font=("微软雅黑", 12),
+            bg="#e74c3c",
+            fg="white",
+            width=10,
+            command=shop_window.destroy
+        ).pack(pady=20)
+
+        canvas.pack(side="left", fill="both", expand=True, padx=(10, 0))
+        scrollbar.pack(side="right", fill="y")
+
+        # 使商城窗口获得焦点
+        shop_window.focus_set()
+
+    def buy_equipment(self, equip, shop_window):
+        """购买装备"""
+        if self.player.gold >= equip['price']:
+            # 扣除金币
+            self.player.gold -= equip['price']
+
+            # 添加装备到玩家背包
+            self.player.equipment.append(equip)
+
+            # 更新装备栏按钮
+            self.update_equipment_buttons()
+
+            # 显示购买成功提示
+            messagebox.showinfo("购买成功",
+                                f"成功购买【{equip['name']}】！\n花费 {equip['price']} 金币。\n剩余金币: {self.player.gold}")
+
+            # 关闭商城窗口
+            shop_window.destroy()
+        else:
+            messagebox.showwarning("金币不足", f"金币不足！\n需要: {equip['price']} 金币\n当前: {self.player.gold} 金币")
 
     def update_equipment_buttons(self):
         """更新装备栏按钮"""
@@ -434,9 +634,9 @@ class MazeGame:
         if self.game_over or self.paused:
             return
 
-        # 使用装备并获取提示信息 - 新增传递box_positions和maze参数
+        # 使用装备并获取提示信息 - 新增传递game_instance参数
         msg = EquipmentSystem.use_equipment(self.player, equip, self.monsters,
-                                            self.box_positions, self.maze)
+                                            self.box_positions, self.maze, self)
 
         # 从装备列表中移除已使用的装备
         self.player.equipment.remove(equip)
@@ -529,13 +729,294 @@ class MazeGame:
     def on_resize(self, event):
         self.draw()
 
+    # ========== 新增：生成火把 ==========
+    def spawn_torch(self):
+        """在出生点附近两格范围内生成火把"""
+        start_x, start_y = 1, 1  # 出生点坐标
+
+        # 生成出生点周围两格的可能位置
+        possible_positions = []
+        for dx in range(-2, 3):
+            for dy in range(-2, 3):
+                x = start_x + dx
+                y = start_y + dy
+                # 排除出生点本身
+                if (dx == 0 and dy == 0):
+                    continue
+                # 确保在迷宫范围内
+                if 0 <= x < self.size and 0 <= y < self.size:
+                    # 确保在路径上
+                    if self.maze[y][x] == 1:
+                        possible_positions.append((x, y))
+
+        # 如果找到合适位置，随机选择一个
+        if possible_positions:
+            self.torch_position = random.choice(possible_positions)
+            self.torch_collected = False
+        else:
+            # 如果没有合适位置，放在出生点旁边第一个可用位置
+            directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+            for dx, dy in directions:
+                x, y = start_x + dx, start_y + dy
+                if 0 <= x < self.size and 0 <= y < self.size and self.maze[y][x] == 1:
+                    self.torch_position = (x, y)
+                    self.torch_collected = False
+                    break
+
+    # ========== 新增：生成陷阱 ==========
+    def generate_traps(self):
+        """生成陷阱，分布在迷宫路径上"""
+        self.trap_positions = []
+        self.active_traps = set()
+
+        # 确定陷阱数量（根据迷宫大小决定）
+        trap_count = min(8, self.size // 3)
+
+        # 收集所有可能的路径位置（排除起点、终点、盲盒、火把位置）
+        possible_positions = []
+        for y in range(self.size):
+            for x in range(self.size):
+                # 只放在路径上
+                if self.maze[y][x] == 1:
+                    # 排除起点
+                    if (x, y) == (1, 1):
+                        continue
+                    # 排除终点
+                    if (x, y) == (self.end_grid_x, self.end_grid_y):
+                        continue
+                    # 排除盲盒位置
+                    if (x, y) in self.box_positions:
+                        continue
+                    # 排除火把位置
+                    if self.torch_position and (x, y) == self.torch_position:
+                        continue
+                    possible_positions.append((x, y))
+
+        # 如果可能的陷阱位置太少，减少陷阱数量
+        trap_count = min(trap_count, len(possible_positions))
+
+        if trap_count > 0:
+            # 随机选择陷阱位置
+            selected_positions = random.sample(possible_positions, trap_count)
+
+            for x, y in selected_positions:
+                # 随机选择陷阱类型（1=传送陷阱，2=反向陷阱）
+                trap_type = random.randint(1, 2)
+                self.trap_positions.append((x, y, trap_type))
+                self.active_traps.add((x, y, trap_type))
+
+    # ========== 新增：检查陷阱碰撞 ==========
+    def check_trap_collision(self):
+        """检查玩家是否触发陷阱"""
+        if self.game_over or self.paused:
+            return
+
+        grid_x = int(self.player.x // self.cell_size)
+        grid_y = int(self.player.y // self.cell_size)
+
+        # 检查玩家是否在陷阱位置上
+        for trap_x, trap_y, trap_type in self.trap_positions:
+            if (grid_x, grid_y) == (trap_x, trap_y) and (trap_x, trap_y, trap_type) in self.active_traps:
+                # 触发陷阱
+                self.trigger_trap(trap_x, trap_y, trap_type)
+                # 陷阱触发后移除（避免重复触发）
+                self.active_traps.remove((trap_x, trap_y, trap_type))
+                break
+
+    # ========== 新增：触发陷阱效果 ==========
+    def trigger_trap(self, trap_x, trap_y, trap_type):
+        """触发陷阱效果"""
+        if trap_type == 1:
+            # 传送陷阱：将玩家传送到除终点外的随机位置
+            self.trigger_teleport_trap(trap_x, trap_y)
+        elif trap_type == 2:
+            # 反向陷阱：让玩家移动键反向10秒
+            self.trigger_reverse_trap()
+
+    # ========== 新增：触发传送陷阱 ==========
+    def trigger_teleport_trap(self, trap_x, trap_y):
+        """触发传送陷阱效果"""
+        # 收集所有可能的传送位置（路径上，排除起点、终点、当前陷阱位置）
+        possible_positions = []
+        for y in range(self.size):
+            for x in range(self.size):
+                # 只放在路径上
+                if self.maze[y][x] == 1:
+                    # 排除起点
+                    if (x, y) == (1, 1):
+                        continue
+                    # 排除终点
+                    if (x, y) == (self.end_grid_x, self.end_grid_y):
+                        continue
+                    # 排除当前陷阱位置
+                    if (x, y) == (trap_x, trap_y):
+                        continue
+                    possible_positions.append((x, y))
+
+        if possible_positions:
+            # 随机选择一个传送位置
+            target_x, target_y = random.choice(possible_positions)
+
+            # 传送玩家
+            self.player.x = target_x * self.cell_size + (self.cell_size - self.player.size) / 2
+            self.player.y = target_y * self.cell_size + (self.cell_size - self.player.size) / 2
+
+            # 显示提示
+            self.trap_triggered_text = "⚠️ 触发传送陷阱！你被传送到随机位置！"
+            self.trap_triggered_show_time = time.time() + 3
+
+            # 短暂无敌，避免刚传送就被怪物攻击
+            self.invincible = True
+            self.invincible_end = time.time() + 2
+
+    # ========== 新增：触发反向陷阱 ==========
+    def trigger_reverse_trap(self):
+        """触发反向陷阱效果"""
+        # 设置玩家控制反向
+        self.player.control_reversed = True
+        self.player.reverse_end_time = time.time() + 10
+
+        # 显示提示
+        self.trap_triggered_text = "⚠️ 触发反向陷阱！移动键反向10秒！"
+        self.trap_triggered_show_time = time.time() + 3
+
+    # ========== 新增：更新陷阱可见状态 ==========
+    def update_trap_visibility(self):
+        """更新陷阱可见状态"""
+        current_time = time.time()
+        if self.trap_visible and current_time > self.trap_visible_end_time:
+            self.trap_visible = False
+
+    # ========== 修改：迷雾生成函数（可以覆盖墙壁） ==========
+    def generate_fog(self):
+        """生成不透明的白色迷雾区域，可以覆盖墙壁"""
+        # 检查吹风机效果是否激活
+        if time.time() < self.player.no_fog_until:
+            # 吹风机效果激活期间，不生成迷雾
+            self.fog_warning_text = "吹风机效果激活，迷雾生成被阻止！"
+            self.fog_warning_show_time = time.time() + 2
+            self.next_fog_time = time.time() + self.fog_interval  # 重置迷雾计时器
+            return
+
+        # 清除之前的迷雾
+        for y in range(self.size):
+            for x in range(self.size):
+                self.fog[y][x] = 0
+
+        # 随机确定迷雾占地图的百分比（30%到50%）
+        self.fog_percentage = random.uniform(0.3, 0.5)
+        total_cells = self.size * self.size
+        fog_cells_needed = int(total_cells * self.fog_percentage)
+
+        # 随机选择一个起始点（避开起点、终点、火把位置和陷阱位置）
+        while True:
+            start_x = random.randint(0, self.size - 1)
+            start_y = random.randint(0, self.size - 1)
+            # 确保起始点不是起点、终点或火把位置
+            # 注意：现在可以覆盖墙壁，所以不限制必须是路径
+            if ((start_x, start_y) != (1, 1) and
+                    (start_x, start_y) != (self.end_grid_x, self.end_grid_y) and
+                    not (self.torch_position and (start_x, start_y) == self.torch_position)):
+                # 检查是否在陷阱位置上（如果陷阱可见，我们希望避开陷阱位置生成迷雾）
+                is_trap_position = False
+                for trap_x, trap_y, _ in self.trap_positions:
+                    if (start_x, start_y) == (trap_x, trap_y):
+                        is_trap_position = True
+                        break
+                if not is_trap_position:
+                    break
+
+        # 使用BFS算法生成连续的迷雾区域
+        directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        fog_cells = []
+        visited = set()
+        queue = [(start_x, start_y)]
+        visited.add((start_x, start_y))
+
+        while queue and len(fog_cells) < fog_cells_needed:
+            x, y = queue.pop(0)
+
+            # 现在可以覆盖任何类型的格子，包括墙壁
+            fog_cells.append((x, y))
+            self.fog[y][x] = 1
+
+            # 随机打乱方向，使迷雾形状更自然
+            random.shuffle(directions)
+            for dx, dy in directions:
+                nx, ny = x + dx, y + dy
+                if (0 <= nx < self.size and 0 <= ny < self.size and
+                        (nx, ny) not in visited and
+                        len(fog_cells) < fog_cells_needed):
+                    # 可以扩展到任何格子，包括墙壁
+                    visited.add((nx, ny))
+                    queue.append((nx, ny))
+
+        # 显示迷雾生成提示
+        self.fog_warning_text = f"迷雾已覆盖{int(self.fog_percentage * 100)}%区域！"
+        self.fog_warning_show_time = time.time() + 2
+
+    # ========== 修改：判断格子是否可见（新增吹风机效果判断） ==========
+    def is_cell_visible(self, x, y):
+        """判断指定格子是否可见（不被迷雾覆盖或玩家拥有火把/吹风机效果）"""
+        # 吹风机效果激活期间，所有格子都可见
+        if time.time() < self.player.no_fog_until:
+            return True
+
+        # 如果没有迷雾，则所有格子都可见
+        if all(cell == 0 for row in self.fog for cell in row):
+            return True
+
+        # 如果该格子没有迷雾，则可见
+        if self.fog[y][x] == 0:
+            return True
+
+        # 如果玩家持有火把，则判断是否在火把照亮范围内
+        if self.player.has_torch:
+            # 获取玩家当前位置（网格坐标）
+            player_grid_x = int(self.player.x // self.cell_size)
+            player_grid_y = int(self.player.y // self.cell_size)
+
+            # 计算曼哈顿距离
+            distance = abs(x - player_grid_x) + abs(y - player_grid_y)
+
+            # 如果在火把照亮范围内，则可见
+            if distance <= self.player.torch_light_radius:
+                return True
+
+        # 其他情况不可见
+        return False
+
+    # ========== 修改：迷雾计时和警告管理（考虑吹风机效果） ==========
+    def update_fog_timer(self):
+        """更新迷雾计时器和警告状态"""
+        current_time = time.time()
+
+        # 更新游戏时长
+        self.game_duration = int(current_time - self.game_start_time)
+
+        # 检查是否需要生成迷雾（如果吹风机效果激活，不生成迷雾）
+        if current_time >= self.next_fog_time and current_time >= self.player.no_fog_until:
+            self.generate_fog()
+            self.next_fog_time = current_time + self.fog_interval
+            self.fog_warning = False
+        # 检查是否需要显示警告（生成前3秒，且吹风机效果未激活）
+        elif current_time >= self.next_fog_time - self.fog_warning_duration and current_time >= self.player.no_fog_until:
+            if not self.fog_warning:
+                self.fog_warning = True
+                self.fog_warning_time = current_time
+                self.fog_warning_text = f"迷雾将在3秒后生成！"
+                self.fog_warning_show_time = current_time + self.fog_warning_duration
+
     def update_player(self):
-        # 新增：检测透视状态过期
+        # 新增：检测吹风机效果过期
+        if self.player.no_fog_until > 0 and time.time() > self.player.no_fog_until:
+            self.player.no_fog_until = 0
+
+        # 原有代码保持不变
         if self.player.clairvoyance and time.time() > self.player.clairvoyance_end:
             self.player.clairvoyance = False
             self.player.box_contents = {}
 
-        # 原有代码保持不变
         if self.player.invisible and time.time() > self.player.invisible_end:
             self.player.invisible = False
 
@@ -557,6 +1038,12 @@ class MazeGame:
             self.player.y += dy
 
         self.check_box_collision()
+
+        # ========== 新增：检测火把拾取 ==========
+        self.check_torch_collision()
+
+        # ========== 新增：检测陷阱碰撞 ==========
+        self.check_trap_collision()
 
         # ========== 终极修复：终点检测逻辑 ==========
         # 1. 计算终点的像素范围
@@ -627,6 +1114,22 @@ class MazeGame:
                 # 无论开出什么都给予短暂无敌
                 self.invincible = True
                 self.invincible_end = time.time() + self.invincible_duration
+
+    # ========== 新增：检测火把拾取 ==========
+    def check_torch_collision(self):
+        """检测玩家是否拾取火把"""
+        if self.torch_position is None or self.torch_collected:
+            return
+
+        grid_x = int(self.player.x // self.cell_size)
+        grid_y = int(self.player.y // self.cell_size)
+
+        if (grid_x, grid_y) == self.torch_position:
+            # 玩家拾取火把
+            self.player.has_torch = True
+            self.torch_collected = True
+            self.box_reward_text = "🔥 获得火把！现在可以照亮周围两格迷雾！"
+            self.box_reward_show_time = time.time() + 3
 
     def handle_special_monster_effects(self, monster):
         if monster.type == "知识怪":
@@ -895,6 +1398,53 @@ class MazeGame:
                 fill="#ffff00", outline="#ffff00"
             )
 
+    # ========== 新增：绘制陷阱 ==========
+    def draw_traps(self, scale, offset_x, offset_y):
+        """绘制陷阱"""
+        if not self.trap_positions:
+            return
+
+        for trap_x, trap_y, trap_type in self.trap_positions:
+            # 检查陷阱是否激活（未触发）
+            if (trap_x, trap_y, trap_type) not in self.active_traps:
+                continue
+
+            # 检查格子是否可见
+            if not self.is_cell_visible(trap_x, trap_y):
+                continue
+
+            x1 = offset_x + trap_x * scale * self.cell_size
+            y1 = offset_y + trap_y * scale * self.cell_size
+            x2 = x1 + scale * self.cell_size
+            y2 = y1 + scale * self.cell_size
+
+            # 如果陷阱可见，绘制陷阱
+            if self.trap_visible:
+                if trap_type == 1:
+                    # 传送陷阱：紫色
+                    self.canvas.create_rectangle(x1 + 5, y1 + 5, x2 - 5, y2 - 5,
+                                                 fill="#9b30ff", outline="#6a0dad", width=2)
+                    self.canvas.create_text(x1 + (x2 - x1) / 2, y1 + (y2 - y1) / 2,
+                                            text="🌀", font=("Arial", 16))
+                elif trap_type == 2:
+                    # 反向陷阱：橙色
+                    self.canvas.create_rectangle(x1 + 5, y1 + 5, x2 - 5, y2 - 5,
+                                                 fill="#ff8c00", outline="#ff4500", width=2)
+                    self.canvas.create_text(x1 + (x2 - x1) / 2, y1 + (y2 - y1) / 2,
+                                            text="🔄", font=("Arial", 16))
+
+            # 如果陷阱不可见但仍然激活，绘制一个微小的提示（可选）
+            elif not self.trap_visible and self.player.has_torch:
+                # 玩家持有火把时，可以稍微看到陷阱的轮廓
+                if trap_type == 1:
+                    # 传送陷阱：浅紫色轮廓
+                    self.canvas.create_rectangle(x1 + 10, y1 + 10, x2 - 10, y2 - 10,
+                                                 outline="#e6d5ff", width=1, dash=(2, 2))
+                elif trap_type == 2:
+                    # 反向陷阱：浅橙色轮廓
+                    self.canvas.create_rectangle(x1 + 10, y1 + 10, x2 - 10, y2 - 10,
+                                                 outline="#ffd8a6", width=1, dash=(2, 2))
+
     def draw(self):
         self.canvas.delete("all")
         width = self.canvas.winfo_width()
@@ -907,8 +1457,14 @@ class MazeGame:
         offset_x = (width - int(maze_width * scale)) // 2
         offset_y = (height - int(maze_height * scale)) // 2
 
-        for y, row in enumerate(self.maze):
-            for x, cell in enumerate(row):
+        # ========== 修改：先绘制迷宫（但只绘制可见部分） ==========
+        for y in range(self.size):
+            for x in range(self.size):
+                # 检查格子是否可见
+                if not self.is_cell_visible(x, y):
+                    continue  # 如果不可见，跳过绘制
+
+                cell = self.maze[y][x]
                 x1 = offset_x + x * scaled_cell
                 y1 = offset_y + y * scaled_cell
                 x2 = x1 + scaled_cell
@@ -919,14 +1475,14 @@ class MazeGame:
                 elif cell == 1:
                     self.canvas.create_rectangle(x1, y1, x2, y2, fill="#cce5ff", outline="")
                 elif cell == 2:
-                    # 恢复需求：红色边框（宽度4）+ 蓝色背景 + 白色“终点”文字
+                    # 恢复需求：红色边框（宽度4）+ 蓝色背景 + 白色"终点"文字
                     self.canvas.create_rectangle(
                         x1, y1, x2, y2,
                         fill="#0066CC",  # 深蓝色背景（高对比度）
                         outline="red",  # 红色边框
                         width=4  # 加粗边框，确保醒目
                     )
-                    # 绘制“终点”文字，居中显示
+                    # 绘制"终点"文字，居中显示
                     self.canvas.create_text(
                         x1 + scaled_cell // 2, y1 + scaled_cell // 2,
                         text="终点",
@@ -954,6 +1510,47 @@ class MazeGame:
                         self.canvas.create_text(x1 + scaled_cell // 2, y1 + scaled_cell + 20,
                                                 text=content, font=("微软雅黑", 8), fill="red")
 
+        # ========== 新增：绘制火把（如果未被拾取且可见） ==========
+        if self.torch_position and not self.torch_collected:
+            torch_x, torch_y = self.torch_position
+            # 检查火把位置是否可见
+            if self.is_cell_visible(torch_x, torch_y):
+                x1 = offset_x + torch_x * scaled_cell
+                y1 = offset_y + torch_y * scaled_cell
+                x2 = x1 + scaled_cell
+                y2 = y1 + scaled_cell
+
+                # 绘制火把底座
+                self.canvas.create_rectangle(x1 + scaled_cell // 4, y1 + scaled_cell // 2,
+                                             x2 - scaled_cell // 4, y2 - 5,
+                                             fill="#8B4513", outline="")
+                # 绘制火把火焰
+                self.canvas.create_oval(x1 + scaled_cell // 3, y1 + 5,
+                                        x2 - scaled_cell // 3, y1 + scaled_cell // 2,
+                                        fill="#FF4500", outline="#FF6347")
+                self.canvas.create_text(x1 + scaled_cell // 2, y1 + scaled_cell + 15,
+                                        text="🔥 火把", font=("微软雅黑", 10), fill="#FF6347")
+
+        # ========== 新增：绘制陷阱 ==========
+        self.draw_traps(scale, offset_x, offset_y)
+
+        # ========== 修改：绘制迷雾（不透明白色，覆盖不可见的区域） ==========
+        # 吹风机效果激活期间不绘制迷雾
+        if time.time() >= self.player.no_fog_until:
+            for y in range(self.size):
+                for x in range(self.size):
+                    # 如果格子有迷雾且不可见，则绘制白色迷雾
+                    if self.fog[y][x] == 1 and not self.is_cell_visible(x, y):
+                        x1 = offset_x + x * scaled_cell
+                        y1 = offset_y + y * scaled_cell
+                        x2 = x1 + scaled_cell
+                        y2 = y1 + scaled_cell
+                        # 绘制不透明的白色矩形作为迷雾
+                        self.canvas.create_rectangle(x1, y1, x2, y2,
+                                                     fill="white",
+                                                     outline="",
+                                                     width=0)
+
         attr_texts = [
             f"角色: {self.player.type}",
             f"生命值: {max(0, self.player.hp)}/{self.player.max_hp}",  # 新增：显示最大生命值
@@ -965,7 +1562,94 @@ class MazeGame:
         for idx, text in enumerate(attr_texts):
             self.canvas.create_text(50, 20 + idx * 20, text=text, font=("微软雅黑", 12), fill="#2c3e50")
 
-        # 新增：显示特殊状态（添加透视状态）
+        # ========== 新增：右上角显示游戏时长 ==========
+        # 将游戏时长转换为分钟和秒
+        minutes = self.game_duration // 60
+        seconds = self.game_duration % 60
+        time_text = f"游戏时长: {minutes:02d}:{seconds:02d}"
+        self.canvas.create_text(width - 100, 20,
+                                text=time_text,
+                                font=("微软雅黑", 12, "bold"),
+                                fill="#2c3e50")
+
+        # ========== 修改：右上角显示迷雾倒计时（考虑吹风机效果） ==========
+        if time.time() < self.player.no_fog_until:
+            # 吹风机效果激活期间，显示吹风机效果倒计时
+            fog_remain = max(0, int(self.player.no_fog_until - time.time()))
+            fog_text = f"吹风机: {fog_remain}s"
+            self.canvas.create_text(width - 100, 40,
+                                    text=fog_text,
+                                    font=("微软雅黑", 12, "bold"),
+                                    fill="#1abc9c")
+        else:
+            # 正常显示迷雾倒计时
+            fog_remain = max(0, int(self.next_fog_time - time.time()))
+            fog_text = f"迷雾刷新: {fog_remain}s"
+            self.canvas.create_text(width - 100, 40,
+                                    text=fog_text,
+                                    font=("微软雅黑", 12),
+                                    fill="#3498db" if fog_remain > 3 else "#e74c3c")
+
+        # ========== 新增：显示火把状态 ==========
+        if self.player.has_torch:
+            self.canvas.create_text(width - 100, 60,
+                                    text="🔥 持有火把",
+                                    font=("微软雅黑", 12, "bold"),
+                                    fill="#FF6347")
+            # 绘制火把照亮范围提示
+            self.canvas.create_text(width - 100, 80,
+                                    text=f"照亮半径: {self.player.torch_light_radius}格",
+                                    font=("微软雅黑", 10),
+                                    fill="#FFA500")
+
+        # ========== 新增：显示陷阱可见倒计时 ==========
+        if self.trap_visible:
+            trap_remain = max(0, int(self.trap_visible_end_time - time.time()))
+            trap_text = f"陷阱可见: {trap_remain}s"
+            self.canvas.create_text(width - 100, 100,
+                                    text=trap_text,
+                                    font=("微软雅黑", 10),
+                                    fill="#9b30ff")
+
+        # ========== 新增：迷雾警告提示 ==========
+        if time.time() < self.fog_warning_show_time:
+            # 绘制迷雾警告背景
+            warning_width = len(self.fog_warning_text) * 10
+            warning_x = width // 2
+            warning_y = 50
+            self.canvas.create_rectangle(
+                warning_x - warning_width / 2 - 10, warning_y - 15,
+                warning_x + warning_width / 2 + 10, warning_y + 15,
+                fill="white", outline="#e74c3c", width=2
+            )
+            # 绘制迷雾警告文本
+            self.canvas.create_text(
+                warning_x, warning_y,
+                text=self.fog_warning_text,
+                fill="#e74c3c",
+                font=("微软雅黑", 14, "bold")
+            )
+
+        # ========== 新增：陷阱触发提示 ==========
+        if time.time() < self.trap_triggered_show_time:
+            # 绘制陷阱触发提示背景
+            trap_warning_width = len(self.trap_triggered_text) * 10
+            trap_warning_x = width // 2
+            trap_warning_y = 80
+            self.canvas.create_rectangle(
+                trap_warning_x - trap_warning_width / 2 - 10, trap_warning_y - 15,
+                trap_warning_x + trap_warning_width / 2 + 10, trap_warning_y + 15,
+                fill="white", outline="#9b30ff", width=2
+            )
+            # 绘制陷阱触发提示文本
+            self.canvas.create_text(
+                trap_warning_x, trap_warning_y,
+                text=self.trap_triggered_text,
+                fill="#9b30ff",
+                font=("微软雅黑", 14, "bold")
+            )
+
+        # 原有状态显示代码
         status_texts = []
         if self.player.shield_active:
             status_texts.append("🛡️ 防护盾激活")
@@ -978,6 +1662,9 @@ class MazeGame:
         if self.player.clairvoyance:
             clairvoyance_remain = max(0, int(self.player.clairvoyance_end - time.time()))
             status_texts.append(f"🔍 透视剩余: {clairvoyance_remain}s")
+        if self.player.no_fog_until > time.time():
+            fog_remain = max(0, int(self.player.no_fog_until - time.time()))
+            status_texts.append(f"🌪️ 吹风机剩余: {fog_remain}s")
 
         if status_texts:
             for idx, text in enumerate(status_texts):
@@ -1006,7 +1693,8 @@ class MazeGame:
             )
 
         refresh_remain = max(0, int(self.box_refresh_interval - (time.time() - self.last_box_refresh)))
-        self.canvas.create_text(width - 100, 20,
+        # 将盲盒刷新倒计时移到左上角，避免与右上角信息重叠
+        self.canvas.create_text(100, 20,
                                 text=f"盲盒刷新: {refresh_remain}s",
                                 font=("微软雅黑", 12), fill="#e74c3c")
 
@@ -1158,11 +1846,24 @@ class MazeGame:
         stats_frame.pack(pady=20, ipadx=20, ipady=10)
 
         # 准备统计信息
+        # 将游戏时长转换为分钟和秒
+        minutes = self.game_duration // 60
+        seconds = self.game_duration % 60
+
+        # 新增：火把状态
+        torch_status = "是" if self.player.has_torch else "否"
+
+        # 新增：触发的陷阱数量
+        triggered_traps = len(self.trap_positions) - len(self.active_traps)
+
         stats = [
             ("角色类型", self.player.type),
             ("最终生命值", max(0, self.player.hp)),
             ("剩余金币", self.player.gold),
             ("逃脱怪物数", self.player.monsters_defeated),
+            ("触发陷阱数", f"{triggered_traps}/{len(self.trap_positions)}"),  # 新增：陷阱触发统计
+            ("游戏时长", f"{minutes}分{seconds}秒"),
+            ("获得火把", torch_status),  # 新增：火把状态
             ("最终速度", f"{self.player.speed:.1f}"),
             ("剩余装备数", len(self.player.equipment))  # 新增：统计剩余装备
         ]
@@ -1179,6 +1880,14 @@ class MazeGame:
 
             # 值列
             val_color = "#e74c3c" if label == "最终生命值" and value <= 0 else "#3498db"
+            # 火把状态特殊颜色
+            if label == "获得火把":
+                val_color = "#FF6347" if value == "是" else "#95a5a6"
+            # 陷阱触发数特殊颜色
+            if label == "触发陷阱数":
+                triggered, total = value.split("/")
+                if int(triggered) > 0:
+                    val_color = "#9b30ff"
             tk.Label(
                 stats_frame,
                 text=str(value),
@@ -1238,6 +1947,21 @@ class MazeGame:
         # 重置奖励提示
         self.box_reward_text = ""
         self.box_reward_show_time = 0
+        # 重置迷雾相关状态
+        self.fog = [[0 for _ in range(self.size)] for _ in range(self.size)]
+        self.fog_warning = False
+        self.fog_warning_text = ""
+        self.fog_warning_show_time = 0
+        # 重置火把相关状态
+        self.torch_position = None
+        self.torch_collected = False
+        # 重置陷阱相关状态
+        self.trap_positions = []
+        self.trap_visible = True
+        self.trap_visible_end_time = 0
+        self.active_traps = set()
+        self.trap_triggered_text = ""
+        self.trap_triggered_show_time = 0
 
         # 回到角色选择界面
         self.init_character_select()
@@ -1246,6 +1970,10 @@ class MazeGame:
     def game_loop(self):
         if not self.game_over and not self.paused:
             self.update_player()
+            # ========== 新增：更新迷雾计时器 ==========
+            self.update_fog_timer()
+            # ========== 新增：更新陷阱可见状态 ==========
+            self.update_trap_visibility()
             self.update_monsters()
         self.draw()
 
